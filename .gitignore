@@ -1,0 +1,12 @@
+# Python virtual environment folders
+venv/
+env/
+
+# VS Code / PyCharm
+.vscode/
+.idea/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
