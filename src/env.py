@@ -330,6 +330,7 @@ class VQEnv(gym.Env):
         self.counter = 0
         # Initialize the environment to a random state:
         self.state = self.observation_space.low.copy()
+        # self.state = np.random.uniform(low=self.observation_space.low, high=self.observation_space.high)
         self.info = {'ep_reward': [], 'ep_energy': []}
         return self.state, self.info
     
@@ -363,6 +364,20 @@ class VQEnv(gym.Env):
         - Check if the episode is terminated or truncated.
         - Update the info dictionary with the current energy and reward.
         '''
+
+        # # 1. Decode the action into a quantum circuit.
+        # ansatz = decode_actions_into_circuit(action)    
+        # # 2. Compute the expectation value of the Hamiltonian.
+        # energy = self.compute_expectation_value(ansatz, self.qubit_operator, ansatz.parameters)
+        # # 3. Compute the reward based on the expectation value and circuit depth.
+        # reward = self.compute_reward(energy)
+        # # 4. Encode the quantum circuit into a tensor representation.
+        # update_tensor = encode_circuit_into_input_embedding(ansatz)
+        # # 5. Update the state with the new tensor representation.
+        
+        # # 6. Check if the episode is terminated or truncated.
+        # # 7. Update the info dictionary with the current energy and reward.
+
 
         return self.new_state, self.reward, self.terminated, self.truncated, self.info
 

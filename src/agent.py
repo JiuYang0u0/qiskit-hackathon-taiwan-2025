@@ -8,7 +8,33 @@ from typing import Tuple # For typing annotation.
 from src.actor_critic_networks import ActorNetwork, CriticNetwork
 from src.memory import PPOMemory
 
+"""
+PPOAgent 是一個策略梯度型強化學習演算法的實作，使用 Proximal Policy Optimization (PPO)。
+它主要負責：
+
+建立策略網路（Actor）與價值網路（Critic）
+
+從策略網路抽樣動作
+
+儲存互動資料（state, action, reward, log_prob, value, done）
+
+根據收集到的資料更新 Actor 與 Critic
+
+儲存與載入模型權重
+"""
 class PPOAgent:
+    """
+    state_dim：狀態空間的維度，例如一個觀測值是 [x, y, z] 就是 3。
+    action_dim：動作空間的大小，例如二元選擇就是 2。
+    learning_rate：學習率。
+    gamma：折扣因子，控制未來獎勵的權重。
+    gae_lambda：GAE（Generalized Advantage Estimation）的 λ，平衡 bias-variance。
+    policy_clip：PPO 的策略裁剪參數（限制新舊策略更新幅度）。
+    batch_size：每次更新策略的樣本數。
+    num_epochs：每批資料用來更新策略的迭代次數。
+    optimizer_option：選擇 Adam 或 SGD。
+    chkpt_dir：儲存模型檔案的位置。
+    """
     '''
     Class for the PPO agent.
 
@@ -92,6 +118,10 @@ class PPOAgent:
         '''
         Write your code here.
         '''
+
+        """
+        從 policy 中抽樣動作，並返回動作與 log_prob
+        """
 
         action = []
         probs = []
