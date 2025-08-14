@@ -162,6 +162,9 @@ class VQEnv(gym.Env):
             'render_fps': 60,
         }
 
+        # action_history:
+        self.action_history = []
+
         print(f"\nNumber of spatial orbitals: {num_spatial_orbitals}")
         print(f"Number of particles: {num_particles}")
         print(f"Number of qubits: {self.num_qubits}")
@@ -317,7 +320,7 @@ class VQEnv(gym.Env):
         # The penalty factor should be small enough not to dominate the energy reward.
         depth_penalty_factor = 0.01
         depth_penalty = -depth_penalty_factor * circuit_depth
-        
+
         # 5. Total reward
         total_reward = energy_reward + convergence_bonus + depth_penalty
         return total_reward
@@ -348,15 +351,15 @@ class VQEnv(gym.Env):
         self.state = self.observation_space.low.copy()
         # self.state = np.random.uniform(low=self.observation_space.low, high=self.observation_space.high)
         self.info = {'ep_reward': [], 'ep_energy': []}
+        # clear the action_history
+        self.action_history = []
         return self.state, self.info
     
     def step(self, action: List) -> tuple:
         """
         Returns a single experience from the environment.
-
         - Args:
             - action (List): action taken by the agent.
-
         - Returns:
             - self.new_state (numpy.ndarray or tf.Tensor): the next state normalized.
             - self.reward (float): reward for the action taken.
@@ -364,37 +367,33 @@ class VQEnv(gym.Env):
             - self.truncated (bool): whether the episode is truncated.
             - self.info (dict): to ensure gym-compliance.
         """
-
-        # Update counter
+        # Update counter and action history
         self.counter += 1
-
-        '''
-        Write your code here.
-
-        Tip:
-        - Decode the action into a quantum circuit.
-        - Compute the expectation value of the Hamiltonian.
-        - Compute the reward based on the expectation value and circuit depth.
-        - Encode the quantum circuit into a tensor representation.
-        - Update the state with the new tensor representation.
-        - Check if the episode is terminated or truncated.
-        - Update the info dictionary with the current energy and reward.
-        '''
-
-        # # 1. Decode the action into a quantum circuit.
-        # ansatz = decode_actions_into_circuit(action)    
-        # # 2. Compute the expectation value of the Hamiltonian.
-        # energy = self.compute_expectation_value(ansatz, self.qubit_operator, ansatz.parameters)
-        # # 3. Compute the reward based on the expectation value and circuit depth.
-        # reward = self.compute_reward(energy)
-        # # 4. Encode the quantum circuit into a tensor representation.
-        # update_tensor = encode_circuit_into_input_embedding(ansatz)
-        # # 5. Update the state with the new tensor representation.
+        self.action_history.append(action)
         
-        # # 6. Check if the episode is terminated or truncated.
-        # # 7. Update the info dictionary with the current energy and reward.
+        # 1. Decode the full action history into a quantum circuit.
+        ansatz = decode_actions_into_circuit(self.action_history, self.num_qubits)
 
+        # 2. Compute the expectation value of the Hamiltonian.
+        # The parameters of the ansatz are symbolic and handled by the estimator.
+        energy = self.compute_expectation_value(ansatz, self.qubit_operator, ansatz.parameters)
 
+        # 3. Compute the reward based on the expectation value and circuit depth.
+        circuit_depth = ansatz.depth()
+        self.reward = self.compute_reward(energy, circuit_depth)
+
+        # 4. Encode the quantum circuit into a tensor representation for the next state.
+        self.new_state = encode_circuit_into_input_embedding(ansatz, self.max_circuit_depth)
+
+        # 6. Check if the episode is terminated or truncated.
+        if abs(energy - self.fci_energy) < self.conv_tol:
+            self.terminated = True
+        if self.counter >= self.max_steps_per_episode:
+            self.truncated = True
+            
+        # 7. Update the info dictionary with the current energy and reward.
+        self.info['ep_energy'].append(energy)
+        self.info['ep_reward'].append(self.reward)
         return self.new_state, self.reward, self.terminated, self.truncated, self.info
 
     def render(self, mode: list = ['circuit', 'energy', 'reward'], flag: str = 'inference'):
