@@ -1,87 +1,89 @@
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.distributions as dist
-
+from typing import Tuple
 class ActorNetwork(nn.Module):
     """
     Actor 網路（策略網路）：
-    - 用來輸出在當前狀態下採取各種動作的機率分佈。
-    - 在 PPO 中，Actor 負責學習 policy π(a|s)，也就是「在狀態 s 下，選擇動作 a 的機率」。
+    - 使用 CNN 處理 3D 的電路狀態表示。
+    - 輸出三個獨立的機率分佈，分別對應 (gate_type, control_qubit, target_qubit)。
     """
-    """
-    Actor network for the PPO agent.
-
-    Parameters:
-    -----------
-    state_dim: int
-        Dimension of the state space.
-    action_dim: array
-        Dimension of the action space.
-    """
-    def __init__(self, state_dim, action_dim):
-        # Run the constructor of the parent class (nn.Module):
+    def __init__(self, state_shape: Tuple[int, int, int], num_gate_types: int, num_qubits: int):
+        """
+        Args:
+            state_shape (Tuple[int, int, int]): 輸入狀態的形狀 (channels, height, width)
+                                                i.e., (num_channels, num_qubits, max_moments).
+            num_gate_types (int): 閘的種類數量.
+            num_qubits (int): 量子位元的數量.
+        """
         super().__init__()
 
-        '''
-        Write your code here.
-        '''
+        # CNN feature extractor for the 3D state tensor
+        self.feature_extractor = nn.Sequential(
+            nn.Conv2d(in_channels=state_shape[0], out_channels=32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(in_channels=32, out_channels=64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Flatten(),
+        )
 
-        num_gate_types = action_dim
-        
-        
+        # Calculate the flattened size after the CNN layers
+        with torch.no_grad():
+            dummy_input = torch.zeros(1, *state_shape)
+            flattened_size = self.feature_extractor(dummy_input).shape[1]
 
-        # # Example:
-        # num_gate_types = action_dim  # 動作種類數量（例如量子閘的種類）
-        # # 第一層全連接層，將輸入狀態映射到 128 維特徵
-        # self.fc1 = nn.Linear(state_dim, 128)
-        # # 第二層全連接層，進一步提取特徵
-        # self.fc2 = nn.Linear(128, 128)
-        # # 輸出層，對應到每個動作的 logit（尚未經過 softmax）
-        # self.output_layer = nn.Linear(128, num_gate_types)
+        # Shared fully connected layers
+        self.shared_layers = nn.Sequential(
+            nn.Linear(flattened_size, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+        )
 
-    def forward(self, state):
+        # Output heads for each component of the composite action
+        self.gate_type_head = nn.Linear(256, num_gate_types)
+        self.control_qubit_head = nn.Linear(256, num_qubits)
+        self.target_qubit_head = nn.Linear(256, num_qubits)
+
+    def forward(self, state: torch.Tensor) -> Tuple[dist.Categorical, dist.Categorical, dist.Categorical]:
         """
         Forward pass.
+        Args:
+            state (torch.Tensor): The input state tensor of shape (batch_size, channels, height, width).
+        Returns:
+            A tuple of three Categorical distributions for gate type, control qubit, and target qubit.
         """
+        # Ensure state has a batch dimension
+        if state.dim() == 3:
+            state = state.unsqueeze(0)
 
-        '''
-        Write your code here.
-        '''
-        
-        # Example:
-        # 隱藏層使用 ReLU 激活函數
-        x = F.relu(self.fc1(state))
-        x = F.relu(self.fc2(x))
-        # 計算每個動作的 logit（未經 softmax）
-        # Gate Type Distribution:
-        gate_logits = self.output_layer(x) # Raw logits.
-        # 將 logit 轉為機率分佈（Categorical 會自動套用 softmax）
-        gate_dist = dist.Categorical(logits=gate_logits) # Categorical internally applies Softmax.
-        return gate_dist
+        features = self.feature_extractor(state)
+        shared_output = self.shared_layers(features)
 
+        # Get logits from each head
+        gate_logits = self.gate_type_head(shared_output)
+        control_logits = self.control_qubit_head(shared_output)
+        target_logits = self.target_qubit_head(shared_output)
+
+        # Create categorical distributions
+        gate_dist = dist.Categorical(logits=gate_logits)
+        control_dist = dist.Categorical(logits=control_logits)
+        target_dist = dist.Categorical(logits=target_logits)
+
+        return gate_dist, control_dist, target_dist
 class CriticNetwork(nn.Module):
     """
     Critic 網路（價值函數網路）：
     - 用來估計某個狀態 s 的價值 V(s)。
     - 在 PPO 中，Critic 負責提供「狀態價值」來輔助優勢函數的計算。
     """
-    """
-    Critic network for the PPO agent.
-
-    Parameters:
-    -----------
-    state_dim: int
-        Dimension of the state space.
-    fc1_dims: int
-        Number of neurons in the first hidden layer.
-    fc2_dims: int
-        Number of neurons in the second hidden layer.
-    """
     def __init__(self, state_dim, fc1_dims=256, fc2_dims=256):
-        # Run the constructor of the parent class (nn.Module):
         super().__init__()
-
-        # Neural network layers:
+        
+        # This Critic is designed for a flattened 1D state.
+        # To use the same CNN extractor as the Actor, it would need to be redesigned.
+        # For now, we assume the state will be flattened before being passed to the critic.
         self.fcnn = nn.Sequential(
                 nn.Linear(state_dim, fc1_dims),
                 nn.ReLU(),
@@ -89,10 +91,12 @@ class CriticNetwork(nn.Module):
                 nn.ReLU(),
                 nn.Linear(fc2_dims, 1)
         )
-
     def forward(self, state):
         """
         Forward pass.
         """
+        # If state is 3D/4D, flatten it.
+        if state.dim() > 1:
+            state = state.flatten(start_dim=1)
         value = self.fcnn(state)
         return value
