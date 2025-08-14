@@ -289,22 +289,38 @@ class VQEnv(gym.Env):
 
         return expectation_value
 
-    def compute_reward(self):
+    def compute_reward(self, current_energy: float, circuit_depth: int) -> float:
         """
         Computes the reward for a given circuit.
 
         Args:
-            ...
+            current_energy (float): The expectation value of the Hamiltonian for the current circuit.
+            circuit_depth (int): The depth of the current circuit.
 
         Returns:
             reward (float): the reward value.
         """
+        # 1. Calculate the error between the current energy and the target FCI energy
+        error = abs(current_energy - self.fci_energy)
 
-        '''
-        Write your code here.
-        '''
+        # 2. Primary reward based on the energy error (closer to zero is better)
+        # We use a dense reward: the negative of the error.
+        energy_reward = -error
 
-        pass
+        # 3. Convergence Bonus: A large bonus for getting very close to the target energy
+        convergence_bonus = 0.0
+        if error < self.conv_tol:
+            convergence_bonus = 10.0  # A significant bonus for convergence
+
+        # 4. Depth Penalty: A small penalty for deeper circuits
+        # This encourages the agent to find more efficient (shallower) circuits.
+        # The penalty factor should be small enough not to dominate the energy reward.
+        depth_penalty_factor = 0.01
+        depth_penalty = -depth_penalty_factor * circuit_depth
+        
+        # 5. Total reward
+        total_reward = energy_reward + convergence_bonus + depth_penalty
+        return total_reward
 
     def reset(self, seed: int = 42, options: dict = {}) -> tuple:
         """
