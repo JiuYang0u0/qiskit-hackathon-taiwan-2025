@@ -147,7 +147,7 @@ class PPOAgent:
         # Combine actions and log_probs into lists
         action = [gate_type.item(), control_qubit.item(), target_qubit.item()]
         log_probs = [gate_log_prob.item(), control_log_prob.item(), target_log_prob.item()]
-        
+
         return action, log_probs, value.item()
 
     def store_transitions(self, state, action, reward, probs, vals, done):
@@ -158,14 +158,73 @@ class PPOAgent:
 
     def learn(self):
         """
-        This method implements the learning step.
+        This method implements the PPO learning step.
+        It computes advantages, and updates the actor and critic networks.
         """
+        for _ in range(self.num_epochs):
+            # 1. Generate batches from memory
+            state_arr, action_arr, old_prob_arr, vals_arr, \
+            reward_arr, dones_arr, batches = \
+                    self.memory_buffer.generate_batches()
+            
+            # 2. Calculate advantages using GAE
+            advantage = np.zeros(len(reward_arr), dtype=np.float32)
+            for t in range(len(reward_arr)-1, -1, -1):
+                discount = 1
+                a_t = 0
+                for k in range(t, len(reward_arr)-1):
+                       a_t += discount * (reward_arr[k] + self.gamma * vals_arr[k+1] * \
+                            (1-int(dones_arr[k])) - vals_arr[k])
+                       discount *= self.gamma * self.gae_lambda
+                advantage[t] = a_t
 
-        '''
-        Write your code here.
-        '''
+            advantage = torch.tensor(advantage).to(self.device)
+            values = torch.tensor(vals_arr).to(self.device)
 
-        pass
+            # 3. Iterate over mini-batches
+            for batch in batches:
+                states = torch.tensor(state_arr[batch], dtype=torch.float32).to(self.device)
+                old_probs = torch.tensor(old_prob_arr[batch], dtype=torch.float32).to(self.device)
+                actions = torch.tensor(action_arr[batch], dtype=torch.int64).to(self.device)
+
+                # 4. Re-evaluate actions with the current policy
+                gate_dist, control_dist, target_dist = self.actor(states)
+                critic_value = self.critic(states).squeeze()
+
+                # Calculate new log probabilities for the composite action
+                new_gate_log_prob = gate_dist.log_prob(actions[:, 0])
+                new_control_log_prob = control_dist.log_prob(actions[:, 1])
+                new_target_log_prob = target_dist.log_prob(actions[:, 2])
+
+                # Sum the log_probs for the composite action
+                new_probs = new_gate_log_prob + new_control_log_prob + new_target_log_prob
+
+                # Old probs were stored as a list of 3, sum them up
+                old_probs = old_probs.sum(axis=1)
+
+                # 5. Calculate Policy Loss (L_CLIP)
+                prob_ratio = (new_probs - old_probs).exp()
+                weighted_probs = advantage[batch] * prob_ratio
+                weighted_clipped_probs = torch.clamp(prob_ratio, 1-self.policy_clip, 1+self.policy_clip) * advantage[batch]
+                
+                actor_loss = -torch.min(weighted_probs, weighted_clipped_probs).mean()
+
+                # 6. Calculate Value Loss
+                returns = advantage[batch] + values[batch]
+                critic_loss = (returns - critic_value)**2
+                critic_loss = critic_loss.mean()
+
+                # 7. Calculate Total Loss and perform backpropagation
+                total_loss = actor_loss + 0.5*critic_loss
+
+                self.actor_optimizer.zero_grad()
+                self.critic_optimizer.zero_grad()
+                total_loss.backward()
+                self.actor_optimizer.step()
+                self.critic_optimizer.step()
+
+        # 8. Clear memory for the next round of data collection
+        self.memory_buffer.clear_memory()
 
     def save_models(self):
         print("Saving models...")
