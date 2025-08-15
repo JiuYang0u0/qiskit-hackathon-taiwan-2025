@@ -7,6 +7,7 @@ from typing import Tuple # For typing annotation.
 # Importing custom modules:
 from src.actor_critic_networks import ActorNetwork, CriticNetwork
 from src.memory import PPOMemory
+import numpy as np
 
 """
 PPOAgent 是一個策略梯度型強化學習演算法的實作，使用 Proximal Policy Optimization (PPO)。
@@ -102,32 +103,52 @@ class PPOAgent:
         self.actor_chkpt = os.path.join(chkpt_dir, 'actor_net_torch_ppo')
         self.critic_chkpt = os.path.join(chkpt_dir, 'critic_net_torch_ppo')
         
-    def sample_action(self, observation: torch.tensor) -> Tuple[list, list, float]:
+    def sample_action(self, observation: np.ndarray) -> Tuple[list, list, float]:
         """
-        Sample actions from the policy network given the current state (observation).
+        Sample a composite action from the policy network given the current state.
 
         Args:
-            observation (torch.tensor): the state representation.
-
+            observation (np.ndarray): The state representation, expected to be convertible to a 3D tensor.
+        
         Returns:
-            action (list): list of action(s).
-            probs (list): list of probability distribution(s) over action(s).
-            value (float): the value from the Critic network.
+            action (list): A list containing the sampled [gate_type, control_qubit, target_qubit].
+            log_probs (list): A list of log probabilities for each part of the action.
+            value (float): The value of the state from the Critic network.
         """
+        # Convert observation to a tensor and send to the correct device
+        # The observation from env is likely a numpy array, so we convert it.
+        state = torch.tensor(observation, dtype=torch.float32).to(self.device)
+        
+        # Ensure the state has the correct 3D shape for the CNN, and add a batch dimension
+        if state.dim() == 2: # Assuming (H, W) -> need to add Channel dimension
+                state = state.unsqueeze(0) # Add channel dimension: (1, H, W)
+        if state.dim() == 3: # Assuming (C, H, W)
+            state = state.unsqueeze(0) # Add batch dimension: (1, C, H, W)
+            # We are not training here, so we don't need to track gradients
+        
+        with torch.no_grad():
+            # 1. Get action distributions from the Actor network
+            gate_dist, control_dist, target_dist = self.actor(state)
 
-        '''
-        Write your code here.
-        '''
+            # 2. Get state value from the Critic network
+            # The critic network handles flattening internally
+            value = self.critic(state)
 
-        """
-        從 policy 中抽樣動作，並返回動作與 log_prob
-        """
+            # 3. Sample an action from each distribution
+            gate_type = gate_dist.sample()
+            control_qubit = control_dist.sample()
+            target_qubit = target_dist.sample()
 
-        action = []
-        probs = []
-        value = 0.0
-
-        return action, probs, value
+            # 4. Calculate the log probability of each sampled action
+            gate_log_prob = gate_dist.log_prob(gate_type)
+            control_log_prob = control_dist.log_prob(control_qubit)
+            target_log_prob = target_dist.log_prob(target_qubit)
+        
+        # Combine actions and log_probs into lists
+        action = [gate_type.item(), control_qubit.item(), target_qubit.item()]
+        log_probs = [gate_log_prob.item(), control_log_prob.item(), target_log_prob.item()]
+        
+        return action, log_probs, value.item()
 
     def store_transitions(self, state, action, reward, probs, vals, done):
         """
