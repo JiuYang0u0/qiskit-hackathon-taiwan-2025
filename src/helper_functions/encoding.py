@@ -43,7 +43,8 @@ def encode_circuit_into_input_embedding(qc: QuantumCircuit, max_moments: int) ->
         if gate_name == 'cnot':
             gate_name = 'cx'
 
-        qubit_indices = [q.index for q in instruction.qubits]
+        qubit_indices = [qc.find_bit(q).index for q in instruction.qubits]
+
 
         # Determine the moment for the current gate
         # The gate can only be placed after all its qubits are free
@@ -79,5 +80,7 @@ def encode_circuit_into_input_embedding(qc: QuantumCircuit, max_moments: int) ->
         # They will be free at the next moment
         for qubit_idx in qubit_indices:
             qubit_moment_counters[qubit_idx] = moment + 1
+        
+        # circuit_tensor = circuit_tensor.permute(2, 0, 1) # (H,W,C) -> (C,H,W)
 
     return circuit_tensor

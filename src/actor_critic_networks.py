@@ -58,6 +58,21 @@ class ActorNetwork(nn.Module):
         if state.dim() == 3:
             state = state.unsqueeze(0)
 
+        # --- 防禦性維度重塑 START ---
+        if state.dim() == 3:
+            state = state.unsqueeze(0)
+
+        n_channels = 6
+        if state.shape[1] != n_channels:
+            # 如果 Channel 維度不在正確的位置，找到它並移過來
+            if state.shape[2] == n_channels:
+                state = state.permute(0, 2, 1, 3) # (N, H, C, W) -> (N, C, H, W)
+            elif state.shape[3] == n_channels:
+                state = state.permute(0, 3, 1, 2) # (N, H, W, C) -> (N, C, H, W)
+            else:
+                raise ValueError(f"Cannot find channel dimension (size 6) in input shape {state.shape}")
+        # --- 防禦性維度重塑 END ---
+
         features = self.feature_extractor(state)
         shared_output = self.shared_layers(features)
 
@@ -95,6 +110,7 @@ class CriticNetwork(nn.Module):
         """
         Forward pass.
         """
+        # print("Runtime state.shape =", state.shape)
         # If state is 3D/4D, flatten it.
         if state.dim() > 1:
             state = state.flatten(start_dim=1)

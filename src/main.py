@@ -3,6 +3,7 @@ import numpy as np # Numerical operations.
 import ast # Convert string to list.
 import sys # Command-line arguments.
 import os # Directories.
+import matplotlib.pyplot as plt # For plotting results
 
 # Helper functions:
 #from src.helper_functions.save_qubit_op import save_qubit_op_to_file
@@ -107,8 +108,9 @@ if __name__ == '__main__':
     #-------------------建立 PPO 智能體---------------------------
     # Agent:
     agent = PPOAgent(
-        state_dim = env.observation_space.shape[0],
-        action_dim = env.action_space,
+        state_shape = env.observation_space.shape, # 傳遞完整的形狀元組
+        num_gate_types = 5, # 根據我們的設計，閘的類型是 5 種
+        num_qubits = env.num_qubits, # 從環境中獲取量子位元數
         learning_rate = learning_rate,
         gamma = gamma,
         gae_lambda = gae_lambda,
@@ -119,43 +121,70 @@ if __name__ == '__main__':
         chkpt_dir = 'model/ppo')
     
     #-----------------訓練迴圈--------------------------
+    # Create a directory to save results
+    results_dir = 'results'
+    os.makedirs(results_dir, exist_ok=True)
+    
+    final_episode_info = {}
+    
     # Training loop:
     for i in range(num_episodes):
-        observation = env.reset() # 重置成初始值
-        '''
-        Write your code here.
-        '''
-        # done = False
-        # score = 0 # 紀錄該回合總獎勵分數
+        observation, info = env.reset()
+        done = False
+        score = 0 # Record the total reward for this episode
 
-        # for step in range(num_steps):
-        #     # 將狀態轉成 numpy array（避免 shape 問題）
-        #     observation_array = np.array(observation, dtype=np.float32)
+        while not done:
+            # 1. Agent selects an action based on the current state
+            action, log_prob, value = agent.sample_action(observation)
+            # 2. The environment executes the action
+            next_observation, reward, terminated, truncated, info = env.step(action)
 
-        #     # 1️⃣ Agent 根據當前狀態選擇動作 -->sample_action
-        #     action, log_prob, value = agent.select_action(observation_array)
+            # The episode is done if it's terminated or truncated
+            done = terminated or truncated
 
-        #     # 2️⃣ 環境執行該動作
-        #     next_state, reward, done, info = env.step(action)
+            # 3. Store the transition in the agent's memory buffer
+            agent.store_transitions(observation, action, reward, log_prob, value, done)
 
-        #     # 3️⃣ 儲存該步的資料 --> storetransition
-        #     agent.remember(observation_array, action, log_prob, value, reward, done)
+            # 4. Update the score and the state
+            score += reward
+            observation = next_observation
 
-        #     # 4️⃣ 更新分數
-        #     score += reward
+        # 6. After the episode is finished, update the policy
+        agent.learn()
 
-        #     # 5️⃣ 狀態更新
-        #     state = next_state
+        # 7. Log the training progress
+        print(f"Episode {i+1}/{num_episodes} | Reward Score: {score:.4f}")
 
-        #     if done:
-        #         break  # 若環境回報終止信號，提早結束該回合
+        # 8. Optionally, save the models periodically
+        if (i + 1) % 100 == 0:
+            agent.save_models()
+            
+        # Store info from the final episode for plotting
+        if i == num_episodes - 1:
+            final_episode_info = info
 
-        # # 6️⃣ 每回合結束後更新策略網路
-        # agent.learn()
+    #-----------------視覺化結果--------------------------
+    print("\nVisualizing results of the final episode...")
 
-        # # 7️⃣ 紀錄訓練進度
-        # print(f"Episode {i+1}/{num_episodes} | Score: {score:.4f}")
+    # Plot and save the energy curve
+    plt.figure(figsize=(10, 5))
+    plt.plot(final_episode_info.get('ep_energy', []))
+    plt.axhline(y=fci_energy, color='r', linestyle='--', label=f'FCI Energy ({fci_energy:.4f})')
+    plt.title('Energy Convergence per Step (Final Episode)')
+    plt.xlabel('Step')
+    plt.ylabel('Energy')
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(results_dir, 'final_episode_energy_curve.png'))
+    plt.clf()
 
-        # # 8️⃣ 可選：每隔 100 回合儲存一次模型
-        # if (i + 1) % 100 == 0:
-        #     agent.save_models()
+    # Plot and save the reward curve
+    plt.figure(figsize=(10, 5))
+    plt.plot(final_episode_info.get('ep_reward', []))
+    plt.title('Reward per Step (Final Episode)')
+    plt.xlabel('Step')
+    plt.ylabel('Reward')
+    plt.grid(True)
+    plt.savefig(os.path.join(results_dir, 'final_episode_reward_curve.png'))
+    
+    print(f"Plots saved to '{results_dir}' directory.")

@@ -63,8 +63,11 @@ class PPOAgent:
         Directory to save the model checkpoint.
     '''
     def __init__(self,
-                 state_dim,
-                 action_dim,
+                 # 將 state_dim 改為 state_shape
+                 state_shape: Tuple[int, int, int],
+                 # 將 action_dim 改為更具體的參數
+                 num_gate_types: int,
+                 num_qubits: int,
                  learning_rate=0.0003,
                  gamma=0.99,
                  gae_lambda=0.95,
@@ -82,8 +85,15 @@ class PPOAgent:
         self.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
         # Instantiate the Actor and Critic networks:
-        self.actor = ActorNetwork(state_dim=state_dim, action_dim=action_dim).to(self.device)
-        self.critic = CriticNetwork(state_dim=state_dim).to(self.device)
+        # self.actor = ActorNetwork(state_dim=state_dim, action_dim=action_dim).to(self.device)
+        self.actor = ActorNetwork(
+                state_shape=state_shape,
+                num_gate_types=num_gate_types,
+                num_qubits=num_qubits
+            ).to(self.device)
+        # state_shape is (C, H, W)
+        critic_state_dim = state_shape[0] * state_shape[1] * state_shape[2]
+        self.critic = CriticNetwork(state_dim=critic_state_dim).to(self.device)
 
         # Define a dictionary for optimizers:
         optimizers = {
@@ -128,6 +138,7 @@ class PPOAgent:
         
         with torch.no_grad():
             # 1. Get action distributions from the Actor network
+            # print("Init state_shape =", state.shape)
             gate_dist, control_dist, target_dist = self.actor(state)
 
             # 2. Get state value from the Critic network
@@ -154,6 +165,8 @@ class PPOAgent:
         """
         This method stores transitions in the memory buffer.
         """
+        if isinstance(state, torch.Tensor):
+            state = state.cpu().numpy()
         self.memory_buffer.store_memory(state, action, reward, probs, vals, done)
 
     def learn(self):

@@ -5,6 +5,9 @@ import warnings                                  # To ignore warnings.
 import torch                                     # For tensor manipulation (state and action space).
 import time                                      # For time tracking.
 import os                                        # For file system access.
+from gymnasium import spaces                     # 確保導入 spaces
+
+from scipy.optimize import minimize
 
 # Custom helper functions for the environment:
 from src.helper_functions.decoding import decode_actions_into_circuit
@@ -30,7 +33,7 @@ from qiskit_nature.second_q.mappers import JordanWignerMapper, BravyiKitaevMappe
 from qiskit.primitives import StatevectorEstimator # Docs: https://quantum.cloud.ibm.com/docs/en/api/qiskit/qiskit.primitives.StatevectorEstimator
 
 # For high-performance simulations with Aer when testing circuits with noise models.
-#from qiskit_aer.primitives import Estimator as aer_estimator # Docs: https://qiskit.github.io/qiskit-aer/stubs/qiskit_aer.primitives.Estimator.html
+from qiskit_aer.primitives import Estimator as aer_estimator # Docs: https://qiskit.github.io/qiskit-aer/stubs/qiskit_aer.primitives.Estimator.html
 #--------------------------------
 
 # Ignore warnings:
@@ -148,10 +151,21 @@ class VQEnv(gym.Env):
         self.HF = HartreeFock(num_spatial_orbitals, num_particles, mapper)
 
         # Action space:
-        self.action_space = 5 # For example, number of gate types (e.g., Rx, Ry, Rz, H, CNOT).
+        # self.action_space = 5 # For example, number of gate types (e.g., Rx, Ry, Rz, H, CNOT).
+        self.action_space = spaces.Dict({
+        "gate_type": spaces.Discrete(5),
+        "control_qubit": spaces.Discrete(self.num_qubits),
+        "target_qubit": spaces.Discrete(self.num_qubits)
+        })
 
         # Observation space:
-        self.observation_space = gym.spaces.Box(low=np.array([-1, -1, -1]), high=np.array([1, 1, 1]), shape=(3,), dtype='float32')
+        # self.observation_space = gym.spaces.Box(low=np.array([-1, -1, -1]), high=np.array([1, 1, 1]), shape=(3,), dtype='float32')
+        # Actor 輸入是 (C, H, W) = (6, num_qubits, max_circuit_depth)
+        self.observation_space = spaces.Box(
+            low=0, high=1,
+            shape=(6, self.num_qubits, self.max_circuit_depth),
+            dtype=np.float32
+        )
 
         # Counter for rendering:
         self.render_counter = 0
@@ -268,29 +282,53 @@ class VQEnv(gym.Env):
         result = molecule.interpret(sol)
         return result.total_energies[0].real
 
-    def compute_expectation_value(self, ansatz, hamiltonian, params) -> float:
+    def compute_expectation_value(self, ansatz: QuantumCircuit, hamiltonian: SparsePauliOp) -> float:
         """
         Compute the expectation value of the Hamiltonian given a custom ansatz and parameters.
 
         Args:
             ansatz (QuantumCircuit): The quantum circuit representing the ansatz.
             hamiltonian (SparsePauliOp): The Hamiltonian as a SparsePauliOp object.
-            params (np.ndarray or torch.Tensor): Parameter values for the ansatz.
+            # params (np.ndarray or torch.Tensor): Parameter values for the ansatz.
 
         Returns:
             float: The computed expectation value.
         """
 
-        # Estimator:
-        estimator = StatevectorEstimator()
-        # Pubs:
-        pub = (ansatz, hamiltonian, params)
-        # Run:
-        job = estimator.run([pub])
-        result = job.result()[0]
-        expectation_value = result.data.evs
+        # If the circuit has no parameters, just compute the value and return.
+        if ansatz.num_parameters == 0:
+            estimator = StatevectorEstimator()
+            pub = (ansatz, hamiltonian)
+            job = estimator.run([pub])
+            result = job.result()[0]
+            return result.data.evs.real
 
-        return expectation_value
+        # --- Inner optimization loop for variational parameters ---
+
+        estimator = StatevectorEstimator()
+
+        def objective_function(param_values):
+            """Objective function for the classical optimizer."""
+            job = estimator.run([(ansatz, hamiltonian, param_values)])
+            result = job.result()[0]
+            energy = result.data.evs.real
+            return energy
+
+        # Set a random initial point for the optimizer
+        initial_point = np.random.uniform(-np.pi, np.pi, ansatz.num_parameters)
+
+        # Use scipy.optimize.minimize with COBYLA method
+        # This finds the optimal parameters that minimize the objective_function
+        result = minimize(
+            fun=objective_function,
+            x0=initial_point,
+            method='COBYLA'
+        )
+
+            # The minimized energy is stored in result.fun
+        optimized_energy = result.fun
+
+        return optimized_energy
 
     def compute_reward(self, current_energy: float, circuit_depth: int) -> float:
         """
@@ -376,7 +414,7 @@ class VQEnv(gym.Env):
 
         # 2. Compute the expectation value of the Hamiltonian.
         # The parameters of the ansatz are symbolic and handled by the estimator.
-        energy = self.compute_expectation_value(ansatz, self.qubit_operator, ansatz.parameters)
+        energy = self.compute_expectation_value(ansatz, self.qubit_operator)
 
         # 3. Compute the reward based on the expectation value and circuit depth.
         circuit_depth = ansatz.depth()
